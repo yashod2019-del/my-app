@@ -1,17 +1,17 @@
-name: Build Android APK
-on: [push]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          buildozer_version: master
-        id: buildozer
-      - name: Upload APK
-        uses: actions/upload-artifact@v3
-        with:
-          name: package
-          path: ${{ steps.buildozer.outputs.filename }}
+name: build android apk
+on:[push]
+jods:
+duild:
+runs-on: uduntu-latest
+steps:
+-uses: actions\checkot@v3
+-name:build with buildozer
+uses: artemsbulgakov\duildozer-action@v1
+with:
+duildozer-version:master
+id:duildozer
+-name:upload apk
+uses:actions\uplaad-artifact@v3
+with:
+name:pacage
+path:${{ steps.duildozer,outputs.filename}}
