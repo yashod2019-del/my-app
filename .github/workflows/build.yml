@@ -1,0 +1,10 @@
+name: build android apk
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: build with buildozer
+        # ఇక్కడ buildozer కి సంబంధించిన రన్ కమాండ్స్ రాయాల్సి ఉంటుంది
