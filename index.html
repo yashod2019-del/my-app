@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yashoda Voice Reader</title>
+    <title>Yashoda Auto Text Reader</title>
+    <!-- టెసరాక్ట్ లైబ్రరీ -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         html, body {
@@ -16,52 +17,34 @@
             width: 100%; height: 100%; object-fit: cover; z-index: 1;
         }
         .ui-layer {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; justify-content: space-between;
-            align-items: center; z-index: 10;
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(0, 0, 0, 0.7); padding: 20px 0;
+            text-align: center; z-index: 10;
         }
-        .top-box {
-            width: 100%; background: rgba(0, 0, 0, 0.7);
-            padding: 20px 0; text-align: center;
+        #status {
+            font-size: 22px; color: #f1c40f; font-weight: bold;
         }
-        .bottom-box {
-            width: 100%; background: rgba(0, 0, 0, 0.7);
-            padding: 25px 0; text-align: center;
-        }
-        select {
-            padding: 15px 30px; font-size: 20px; border-radius: 10px;
-            font-weight: bold; background-color: #16a085; color: white; border: 2px solid #fff;
-        }
-        #status { font-size: 22px; color: #f1c40f; font-weight: bold; }
-        #textResult { position: absolute; bottom: -999px; opacity: 0; }
     </style>
 </head>
-<body onclick="startScan()">
+<body>
 
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" style="display:none;"></canvas>
-    <textarea id="textResult" readonly></textarea>
 
     <div class="ui-layer">
-        <div class="top-box">
-            <select id="langSelect" onclick="event.stopPropagation()" onchange="resetApp(event)">
-                <option value="eng" selected>English</option>
-                <option value="tel">Telugu</option>
-            </select>
-        </div>
-        <div class="bottom-box">
-            <div id="status">లోడ్ అవుతోంది...</div>
-        </div>
+        <div id="status">యాప్ లోడ్ అవుతోంది...</div>
     </div>
 
 <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const statusDiv = document.getElementById('status');
-    const textResult = document.getElementById('textResult');
     let synth = window.speechSynthesis;
-    let isReading = false;
+    let isProcessing = false;
+    let lastSpokenText = "";
+    let checkInterval;
 
+    // కెమెరా ఆన్ చేయడం
     async function initCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -69,72 +52,78 @@
                 audio: false
             });
             video.srcObject = stream;
-            statusDiv.innerText = "యాప్ రెడీ అయింది. స్క్రీన్ పై క్లిక్ చేయండి.";
-            speakNow("యాప్ రెడీ అయింది. స్క్రీన్ పై ఎక్కడైనా ఒక్కసారి ట్యాప్ చేయండి");
+            statusDiv.innerText = "పుస్తకం వైపు కెమెరా చూపించండి...";
+            
+            // యాప్ రెడీ అవ్వగానే చెప్పే వాయిస్
+            speakNotification("యాప్ రెడీ అయింది. పుస్తకం వైపు కెమెరా చూపించండి.");
+            
+            // కెమెరా స్థిరపడ్డాక ప్రతి 3 సెకన్లకు ఒకసారి ఆటోమేటిక్‌గా స్కాన్ చేస్తుంది
+            setTimeout(() => {
+                checkInterval = setInterval(autoScan, 3000);
+            }, 2000);
+
         } catch (err) {
-            statusDiv.innerText = "కెమెరా ఓపెన్ అవ్వలేదు.";
+            statusDiv.innerText = "కెమెరా పర్మిషన్ ఇవ్వలేదు.";
         }
     }
 
-    async function startScan() {
-        if (synth.speaking) {
-            synth.cancel();
-            statusDiv.innerText = "ఆపాను. మళ్లీ స్కాన్ చేయడానికి ట్యాప్ చేయండి.";
-            return;
-        }
-        if (isReading) return;
+    // ఆటోమేటిక్ స్కాన్ ఫంక్షన్
+    async function autoScan() {
+        // యాప్ ఆల్రెడీ చదువుతూ ఉన్నా లేదా స్కాన్ చేస్తూ ఉన్నా మళ్లీ చేయదు
+        if (isProcessing || synth.speaking) return;
 
-        isReading = true;
-        statusDiv.innerText = "ఫోన్ కదపకండి.. స్కాన్ చేస్తున్నాను...";
-        speakNow("ఫోన్ కదపకండి");
+        isProcessing = true;
+        statusDiv.innerText = "అక్షరాలను వెతుకుతున్నాను...";
 
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        const lang = document.getElementById('langSelect').value;
 
         try {
-            const res = await Tesseract.recognize(canvas, lang);
+            // తెలుగు మరియు ఇంగ్లీష్ రెండింటినీ ఒకేసారి ఆటో-డిటెక్ట్ చేస్తుంది
+            const res = await Tesseract.recognize(canvas, 'eng+tel');
             let txt = res.data.text.trim();
 
-            if (txt !== "") {
-                textResult.value = txt;
-                statusDiv.innerText = "చదువుతున్నాను...";
+            // అక్షరాలు దొరికితే మరియు అది పాత టెక్స్ట్ కాకపోతేనే చదువుతుంది
+            if (txt.length > 3 && txt !== lastSpokenText) {
+                statusDiv.innerText = "అక్షరాలు దొరికాయి.. చదువుతున్నాను...";
+                lastSpokenText = txt; // ఒకే లైన్ మళ్లీ మళ్లీ చదరకుండా ఆపుతుంది
                 readAloud(txt);
-            } else {
-                statusDiv.innerText = "అక్షరాలు దొరకలేదు. మళ్లీ ట్యాప్ చేయండి.";
-                speakNow("అక్షరాలు దొరకలేదు. మళ్లీ ట్యాప్ చేయండి");
+            } else if (txt.length <= 3) {
+                statusDiv.innerText = "పుస్తకం వైపు కెమెరా చూపించండి...";
             }
         } catch (e) {
-            statusDiv.innerText = "లోపం జరిగింది.";
+            console.error(e);
         } finally {
-            isReading = false;
+            isProcessing = false;
         }
     }
 
-    function readAloud(t) {
+    // భాషను బట్టి ఆటోమేటిక్‌గా వాయిస్ మార్చి చదివే ఫంక్షన్
+    function readAloud(text) {
         synth.cancel();
-        const u = new SpeechSynthesisUtterance(t);
-        const lang = document.getElementById('langSelect').value;
-        u.lang = (lang === "tel") ? "te-IN" : "en-US";
-        u.rate = (lang === "tel") ? 0.85 : 0.95;
-        synth.speak(u);
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // టెక్స్ట్‌లో తెలుగు అక్షరాలు ఉన్నాయో లేదో చెక్ చేస్తుంది (Auto Detect)
+        const hasTelugu = /[\u0C00-\u0C7F]/.test(text);
+
+        if (hasTelugu) {
+            utterance.lang = "te-IN";
+            utterance.rate = 0.85; // తెలుగు స్పష్టత కోసం కొంచెం నెమ్మదిగా
+        } else {
+            utterance.lang = "en-US";
+            utterance.rate = 0.95;
+        }
+
+        synth.speak(utterance);
     }
 
-    function speakNow(m) {
-        if (synth.speaking) return;
-        const u = new SpeechSynthesisUtterance(m);
+    // నోటిఫికేషన్స్ కోసం చిన్న హెల్పర్ ఫంక్షన్
+    function speakNotification(msg) {
+        const u = new SpeechSynthesisUtterance(msg);
         u.lang = "te-IN"; u.rate = 0.9;
         synth.speak(u);
-    }
-
-    function resetApp(e) {
-        e.stopPropagation();
-        synth.cancel();
-        statusDiv.innerText = "భాష మార్చబడింది.";
-        speakNow("భాష మార్చబడింది");
     }
 
     window.onload = initCamera;
