@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="te">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yashoda Permanent AI Reader</title>
+    <!-- అన్‌లిమిటెడ్ లోకల్ ఓసిఆర్ లైбрыరీ -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
+        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; pointer-events: none; }
+        .status-layer {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(0, 0, 0, 0.85); padding: 25px 0;
+            text-align: center; z-index: 10; pointer-events: none;
+        }
+        #status { font-size: 24px; color: #f1c40f; font-weight: bold; padding: 0 15px; }
+    </style>
+</head>
+<body>
+
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvasOverlay"></canvas>
+    <canvas id="captureCanvas" style="display:none;"></canvas>
+
+    <div class="status-layer">
+        <div id="status">యాప్ లోడ్ అవుతోంది...</div>
+    </div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvasOverlay = document.getElementById('canvasOverlay');
+    const captureCanvas = document.getElementById('captureCanvas');
+    const statusDiv = document.getElementById('status');
+    let synth = window.speechSynthesis;
+    let isProcessing = false;
+    let lastSpokenText = "";
+    let scanTimer = null;
+    let scheduler = null;
+
+    // లోకల్ AI ఇంజన్ సిద్ధం చేయడం
+    async function initOCR() {
+        statusDiv.innerText = "AI ఇంజన్ సిద్ధం అవుతోంది...";
+        scheduler = Tesseract.createScheduler();
+        
+        // తెలుగు మరియు ఇంగ్లీష్ లాంగ్వేజ్ మోడల్స్ లోడ్ చేయడం
+        const worker = await Tesseract.createWorker('eng+tel');
+        scheduler.addWorker(worker);
+        
+        statusDiv.innerText = "యాప్ రెడీ! టెక్స్ట్ వైపు చూపించండి...";
+        speakNotification("యాప్ రెడీ అయింది. టెక్స్ట్ వైపు చూపించండి, ఎక్కడ చదువుతుందో సెలెక్ట్ చేసి చూపిస్తుంది.");
+        
+        // ప్రతి 3.5 సెకన్లకు ఒకసారి ఆటో స్కాన్ రన్ అవుతుంది
+        scanTimer = setInterval(autoCaptureAndProcess, 3500);
+    }
+
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false
+            });
+            video.srcObject = stream;
+            
+            // కెమెరా ఆన్ అయ్యాక OCR ఇంజన్ స్టార్ట్ అవుతుంది
+            await initOCR();
+        } catch (err) {
+            statusDiv.innerText = "కెమెరా పర్మిషన్ ఇవ్వండి.";
+            speakNotification("కెమెరా పర్మిషన్ ఇవ్వలేదు.");
+        }
+    }
+
+    async function autoCaptureAndProcess() {
+        if (isProcessing || synth.speaking || !scheduler) return;
+
+        isProcessing = true;
+        statusDiv.innerText = "అక్షరాలను వెతుకుతున్నాను...";
+
+        const ctxCapture = captureCanvas.getContext('2d');
+        captureCanvas.width = video.videoWidth;
+        captureCanvas.height = video.videoHeight;
+        ctxCapture.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+        try {
+            // ఏ సర్వర్ తో పనిలేకుండా ఫోన్ లోనే డైరెక్ట్ గా స్కాన్ చేస్తుంది
+            const result = await scheduler.addJob('recognize', captureCanvas);
+            
+            const ctxOverlay = canvasOverlay.getContext('2d');
+            canvasOverlay.width = video.videoWidth;
+            canvasOverlay.height = video.videoHeight;
+            ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+
+            if (result && result.data) {
+                let text = result.data.text.trim();
+                let lines = result.data.lines;
+
+                // టెక్స్ట్ ఉంటేనే లోపలికి వెళ్తుంది
+                if (text.length > 3 && text !== lastSpokenText) {
+                    lastSpokenText = text;
+                    statusDiv.innerText = "చదువుతున్నాను...";
+
+                    // ఎల్లో బాక్స్ సెలెక్షన్ హైలైట్ గీయడం
+                    if (lines && lines.length > 0) {
+                        ctxOverlay.strokeStyle = "#f1c40f"; // ఎల్లో కలర్ బాక్స్
+                        ctxOverlay.lineWidth = 5;
+                        
+                        lines.forEach(line => {
+                            const bbox = line.bbox;
+                            // టెక్స్ట్ ఉన్న ప్రతి లైన్ చుట్టూ బాక్స్ గీస్తుంది
+                            ctxOverlay.strokeRect(bbox.x0, bbox.y0, (bbox.x1 - bbox.x0), (bbox.y1 - bbox.y0));
+                        });
+                    }
+
+                    readAloud(text);
+                } else if (text.length <= 3) {
+                    statusDiv.innerText = "టెక్స్ట్ వైపు చూపించండి...";
+                }
+            }
+        } catch (error) {
+            console.error("OCR లోపం:", error);
+        } finally {
+            isProcessing = false;
+        }
+    }
+
+    function readAloud(text) {
+        synth.cancel();
+        let cleanText = text.replace(/\n/g, " ");
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        const hasTelugu = /[\u0C00-\u0C7F]/.test(cleanText);
+        
+        utterance.lang = hasTelugu ? "te-IN" : "en-US";
+        utterance.rate = hasTelugu ? 0.85 : 0.95;
+        
+        // చదవడం పూర్తి కాగానే స్క్రీన్ క్లియర్ అవుతుంది
+        utterance.onend = function() {
+            const ctxOverlay = canvasOverlay.getContext('2d');
+            ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+            statusDiv.innerText = "టెక్స్ట్ వైపు చూపించండి...";
+        };
+
+        synth.speak(utterance);
+    }
+
+    function speakNotification(msg) {
+        if (synth.speaking) synth.cancel();
+        const u = new SpeechSynthesisUtterance(msg);
+        u.lang = "te-IN"; u.rate = 0.9;
+        synth.speak(u);
+    }
+
+    window.onload = initCamera;
+</script>
+</body>
+</html>
