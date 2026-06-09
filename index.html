@@ -3,130 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yashoda Auto Text Reader</title>
-    <!-- టెసరాక్ట్ లైబ్రరీ -->
+    <title>Yashoda Universal Auto-Reader</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        html, body {
-            margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #000;
-            font-family: sans-serif;
-        }
-        #video {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 100%; object-fit: cover; z-index: 1;
-        }
-        .ui-layer {
-            position: absolute; bottom: 0; left: 0; width: 100%;
-            background: rgba(0, 0, 0, 0.7); padding: 20px 0;
-            text-align: center; z-index: 10;
-        }
-        #status {
-            font-size: 22px; color: #f1c40f; font-weight: bold;
-        }
+        body { margin: 0; background: #000; height: 100vh; overflow: hidden; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        #status { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #fff; font-size: 24px; background: rgba(0,0,0,0.5); padding: 20px; }
     </style>
 </head>
 <body>
-
     <video id="video" autoplay playsinline></video>
+    <div id="status">రెడీ అవుతోంది...</div>
     <canvas id="canvas" style="display:none;"></canvas>
-
-    <div class="ui-layer">
-        <div id="status">యాప్ లోడ్ అవుతోంది...</div>
-    </div>
 
 <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
-    const statusDiv = document.getElementById('status');
+    const status = document.getElementById('status');
     let synth = window.speechSynthesis;
     let isProcessing = false;
     let lastSpokenText = "";
-    let checkInterval;
 
-    // కెమెరా ఆన్ చేయడం
-    async function initCamera() {
+    async function init() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-                audio: false
-            });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
             video.srcObject = stream;
-            statusDiv.innerText = "పుస్తకం వైపు కెమెరా చూపించండి...";
-            
-            // యాప్ రెడీ అవ్వగానే చెప్పే వాయిస్
-            speakNotification("యాప్ రెడీ అయింది. పుస్తకం వైపు కెమెరా చూపించండి.");
-            
-            // కెమెరా స్థిరపడ్డాక ప్రతి 3 సెకన్లకు ఒకసారి ఆటోమేటిక్‌గా స్కాన్ చేస్తుంది
-            setTimeout(() => {
-                checkInterval = setInterval(autoScan, 3000);
-            }, 2000);
-
-        } catch (err) {
-            statusDiv.innerText = "కెమెరా పర్మిషన్ ఇవ్వలేదు.";
-        }
+            status.innerText = "కెమెరా రెడీ! టెక్స్ట్ వైపు చూపించండి.";
+            speak("యాప్ రెడీ అయింది. ఎక్కడైనా టెక్స్ట్ వైపు చూపించండి, అది దానంతట అదే చదువుతుంది.");
+            setInterval(scan, 2500); // ప్రతి 2.5 సెకన్లకు స్కాన్ చేస్తుంది
+        } catch (e) { status.innerText = "కెమెరా పర్మిషన్ ఇవ్వండి."; }
     }
 
-    // ఆటోమేటిక్ స్కాన్ ఫంక్షన్
-    async function autoScan() {
-        // యాప్ ఆల్రెడీ చదువుతూ ఉన్నా లేదా స్కాన్ చేస్తూ ఉన్నా మళ్లీ చేయదు
+    async function scan() {
         if (isProcessing || synth.speaking) return;
-
         isProcessing = true;
-        statusDiv.innerText = "అక్షరాలను వెతుకుతున్నాను...";
 
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        try {
-            // తెలుగు మరియు ఇంగ్లీష్ రెండింటినీ ఒకేసారి ఆటో-డిటెక్ట్ చేస్తుంది
-            const res = await Tesseract.recognize(canvas, 'eng+tel');
-            let txt = res.data.text.trim();
+        // OSD మోడ్ లో టెక్స్ట్ ఎక్కడ ఉన్నా గుర్తిస్తుంది
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng+tel', {
+            logger: m => console.log(m)
+        });
 
-            // అక్షరాలు దొరికితే మరియు అది పాత టెక్స్ట్ కాకపోతేనే చదువుతుంది
-            if (txt.length > 3 && txt !== lastSpokenText) {
-                statusDiv.innerText = "అక్షరాలు దొరికాయి.. చదువుతున్నాను...";
-                lastSpokenText = txt; // ఒకే లైన్ మళ్లీ మళ్లీ చదరకుండా ఆపుతుంది
-                readAloud(txt);
-            } else if (txt.length <= 3) {
-                statusDiv.innerText = "పుస్తకం వైపు కెమెరా చూపించండి...";
-            }
-        } catch (e) {
-            console.error(e);
-        } finally {
-            isProcessing = false;
-        }
-    }
-
-    // భాషను బట్టి ఆటోమేటిక్‌గా వాయిస్ మార్చి చదివే ఫంక్షన్
-    function readAloud(text) {
-        synth.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        
-        // టెక్స్ట్‌లో తెలుగు అక్షరాలు ఉన్నాయో లేదో చెక్ చేస్తుంది (Auto Detect)
-        const hasTelugu = /[\u0C00-\u0C7F]/.test(text);
-
-        if (hasTelugu) {
-            utterance.lang = "te-IN";
-            utterance.rate = 0.85; // తెలుగు స్పష్టత కోసం కొంచెం నెమ్మదిగా
+        if (text.trim().length > 5 && text.trim() !== lastSpokenText) {
+            lastSpokenText = text.trim();
+            status.innerText = "చదువుతున్నాను...";
+            speak(text);
         } else {
-            utterance.lang = "en-US";
-            utterance.rate = 0.95;
+            status.innerText = "టెక్స్ట్ వైపు చూపించండి...";
         }
-
-        synth.speak(utterance);
+        isProcessing = false;
     }
 
-    // నోటిఫికేషన్స్ కోసం చిన్న హెల్పర్ ఫంక్షన్
-    function speakNotification(msg) {
-        const u = new SpeechSynthesisUtterance(msg);
-        u.lang = "te-IN"; u.rate = 0.9;
-        synth.speak(u);
+    function speak(txt) {
+        synth.cancel();
+        let msg = new SpeechSynthesisUtterance(txt);
+        // ఆటో డిటెక్ట్ లాంగ్వేజ్
+        msg.lang = /[\u0C00-\u0C7F]/.test(txt) ? 'te-IN' : 'en-US';
+        synth.speak(msg);
     }
 
-    window.onload = initCamera;
+    init();
 </script>
 </body>
 </html>
