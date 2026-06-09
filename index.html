@@ -3,70 +3,155 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yashoda Universal Auto-Reader</title>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <title>Yashoda Visual AI Reader</title>
     <style>
-        body { margin: 0; background: #000; height: 100vh; overflow: hidden; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        #status { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #fff; font-size: 24px; background: rgba(0,0,0,0.5); padding: 20px; }
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
+        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; pointer-events: none; }
+        .status-layer {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(0, 0, 0, 0.85); padding: 25px 0;
+            text-align: center; z-index: 10; pointer-events: none;
+        }
+        #status { font-size: 24px; color: #f1c40f; font-weight: bold; padding: 0 15px; }
     </style>
 </head>
 <body>
+
     <video id="video" autoplay playsinline></video>
-    <div id="status">రెడీ అవుతోంది...</div>
-    <canvas id="canvas" style="display:none;"></canvas>
+    <!-- టెక్స్ట్ ఎక్కడ ఉందో సెలెక్ట్ చేసి చూపించడానికి ఈ కాన్వాస్ లైన్ ఉపయోగపడుతుంది -->
+    <canvas id="canvasOverlay"></canvas>
+    <canvas id="captureCanvas" style="display:none;"></canvas>
+
+    <div class="status-layer">
+        <div id="status">యాప్ లోడ్ అవుతోంది...</div>
+    </div>
 
 <script>
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const status = document.getElementById('status');
+    const canvasOverlay = document.getElementById('canvasOverlay');
+    const captureCanvas = document.getElementById('captureCanvas');
+    const statusDiv = document.getElementById('status');
     let synth = window.speechSynthesis;
     let isProcessing = false;
     let lastSpokenText = "";
+    let scanTimer = null;
 
-    async function init() {
+    const AI_API_URL = "https://api.ocr.space/parse/image";
+    const API_KEY = "K81347628888957"; 
+
+    async function initCamera() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+                audio: false
+            });
             video.srcObject = stream;
-            status.innerText = "కెమెరా రెడీ! టెక్స్ట్ వైపు చూపించండి.";
-            speak("యాప్ రెడీ అయింది. ఎక్కడైనా టెక్స్ట్ వైపు చూపించండి, అది దానంతట అదే చదువుతుంది.");
-            setInterval(scan, 2500); // ప్రతి 2.5 సెకన్లకు స్కాన్ చేస్తుంది
-        } catch (e) { status.innerText = "కెమెరా పర్మిషన్ ఇవ్వండి."; }
-    }
-
-    async function scan() {
-        if (isProcessing || synth.speaking) return;
-        isProcessing = true;
-
-        const ctx = canvas.getContext('2d');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // OSD మోడ్ లో టెక్స్ట్ ఎక్కడ ఉన్నా గుర్తిస్తుంది
-        const { data: { text } } = await Tesseract.recognize(canvas, 'eng+tel', {
-            logger: m => console.log(m)
-        });
-
-        if (text.trim().length > 5 && text.trim() !== lastSpokenText) {
-            lastSpokenText = text.trim();
-            status.innerText = "చదువుతున్నాను...";
-            speak(text);
-        } else {
-            status.innerText = "టెక్స్ట్ వైపు చూపించండి...";
+            statusDiv.innerText = "యాప్ రెడీ! టెక్స్ట్ వైపు చూపించండి...";
+            speakNotification("యాప్ రెడీ అయింది. టెక్స్ట్ వైపు చూపించండి, ఎక్కడ చదువుతుందో సెలెక్ట్ చేసి చూపిస్తుంది.");
+            
+            // ప్రతి 4 సెకన్లకు ఒకసారి ఆటో స్కాన్ రన్ అవుతుంది
+            scanTimer = setInterval(autoCaptureAndProcess, 4000);
+        } catch (err) {
+            statusDiv.innerText = "కెమెరా పర్మిషన్ ఇవ్వండి.";
+            speakNotification("కెమెరా పర్మిషన్ ఇవ్వలేదు.");
         }
-        isProcessing = false;
     }
 
-    function speak(txt) {
+    async function autoCaptureAndProcess() {
+        if (isProcessing || synth.speaking) return;
+
+        isProcessing = true;
+        statusDiv.innerText = "అక్షరాలను వెతుకుతున్నాను...";
+
+        const ctxCapture = captureCanvas.getContext('2d');
+        captureCanvas.width = video.videoWidth;
+        captureCanvas.height = video.videoHeight;
+        ctxCapture.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+        const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.85);
+
+        try {
+            const formData = new FormData();
+            formData.append("base64Image", dataUrl);
+            formData.append("language", "unk"); 
+            formData.append("isOverlayRequired", "true"); // స్క్రీన్ పై ఎక్కడ టెక్స్ట్ ఉందో కోఆర్డినేట్స్ తెప్పించడానికి
+            formData.append("detectOrientation", "true"); 
+            formData.append("scale", "true"); 
+
+            const response = await fetch(AI_API_URL, {
+                method: "POST",
+                headers: { "apikey": API_KEY },
+                body: formData
+            });
+
+            const result = await response.json();
+            
+            // స్క్రీన్ పాత సెలెక్షన్ బాక్సులను క్లియర్ చేయడం
+            const ctxOverlay = canvasOverlay.getContext('2d');
+            canvasOverlay.width = video.videoWidth;
+            canvasOverlay.height = video.videoHeight;
+            ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+
+            if (result && result.ParsedResults && result.ParsedResults[0]) {
+                let text = result.ParsedResults[0].ParsedText.trim();
+                let parsedResult = result.ParsedResults[0];
+
+                // టెక్స్ట్ కనిపిస్తేనే మరియు అది పాత టెక్స్ట్ కాకపోతేనే లోపలికి వెళ్తుంది
+                if (text.length > 3 && text !== lastSpokenText) {
+                    lastSpokenText = text;
+                    statusDiv.innerText = "చదువుతున్నాను...";
+
+                    // టెక్స్ట్ ఎక్కడ ఉందో అక్కడ ఎల్లో కలర్ బాక్స్ గీయడం (சెలెక్ట్ చేయడం)
+                    if (parsedResult.TextOverlay && parsedResult.TextOverlay.Lines) {
+                        ctxOverlay.strokeStyle = "#f1c40f"; // ఎల్లో కలర్ బాక్స్
+                        ctxOverlay.lineWidth = 4;
+                        
+                        parsedResult.TextOverlay.Lines.forEach(line => {
+                            // ప్రతి లైన్ చుట్టూ బాక్స్ గీస్తుంది
+                            ctxOverlay.strokeRect(line.MinTopLeftX, line.MinTopLeftY, line.MaxWidth, line.MaxHeight);
+                        });
+                    }
+
+                    readAloud(text);
+                } else if (text.length <= 3) {
+                    statusDiv.innerText = "టెక్స్ట్ వైపు చూపించండి...";
+                }
+            }
+        } catch (error) {
+            console.error("AI లోపం:", error);
+        } finally {
+            isProcessing = false;
+        }
+    }
+
+    function readAloud(text) {
         synth.cancel();
-        let msg = new SpeechSynthesisUtterance(txt);
-        // ఆటో డిటెక్ట్ లాంగ్వేజ్
-        msg.lang = /[\u0C00-\u0C7F]/.test(txt) ? 'te-IN' : 'en-US';
-        synth.speak(msg);
+        let cleanText = text.replace(/\n/g, " ");
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        const hasTelugu = /[\u0C00-\u0C7F]/.test(cleanText);
+        
+        utterance.lang = hasTelugu ? "te-IN" : "en-US";
+        utterance.rate = hasTelugu ? 0.85 : 0.95;
+        
+        // చదవడం పూర్తి కాగానే స్క్రీన్ పై ఉన్న ఎల్లో బాక్స్‌ను తీసేస్తుంది
+        utterance.onend = function() {
+            const ctxOverlay = canvasOverlay.getContext('2d');
+            ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+            statusDiv.innerText = "టెక్స్ట్ వైపు చూపించండి...";
+        };
+
+        synth.speak(utterance);
     }
 
-    init();
+    function speakNotification(msg) {
+        if (synth.speaking) synth.cancel();
+        const u = new SpeechSynthesisUtterance(msg);
+        u.lang = "te-IN"; u.rate = 0.9;
+        synth.speak(u);
+    }
+
+    window.onload = initCamera;
 </script>
 </body>
 </html>
