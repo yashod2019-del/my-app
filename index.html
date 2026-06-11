@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yashoda Ultimate Law Book Reader</title>
+    <title>Yashoda Law Book Reader Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -24,7 +24,7 @@
     <canvas id="captureCanvas" style="display:none;"></canvas>
 
     <div class="status-layer">
-        <div id="status">AI Engine Loading...</div>
+        <div id="status">Starting App...</div>
     </div>
 
 <script>
@@ -35,37 +35,61 @@
     let synth = window.speechSynthesis;
     let isProcessing = false;
     let lastSpokenText = "";
-    let scanTimer = null;
-    let scheduler = null;
+    let worker = null;
+
+    // ఆడియో నోటిఫికేషన్ కోసం డిజిటల్ బీప్ సౌండ్ ఫంక్షన్
+    function playBeepSound() {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // మొదటి బీప్
+        let osc1 = audioCtx.createOscillator();
+        let gain1 = audioCtx.createGain();
+        osc1.type = 'sine'; osc1.frequency.value = 880; // హై పిచ్ సౌండ్
+        gain1.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        osc1.connect(gain1); gain1.connect(audioCtx.destination);
+        osc1.start(); osc1.stop(audioCtx.currentTime + 0.15);
+
+        // రెండో బీప్ (కొద్దిగా గ్యాప్ తర్వాత)
+        setTimeout(() => {
+            let osc2 = audioCtx.createOscillator();
+            let gain2 = audioCtx.createGain();
+            osc2.type = 'sine'; osc2.frequency.value = 880;
+            gain2.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc2.connect(gain2); gain2.connect(audioCtx.destination);
+            osc2.start(); osc2.stop(audioCtx.currentTime + 0.15);
+        }, 200);
+    }
 
     async function initOCR() {
-        statusDiv.innerText = "Initializing AI Engine...";
-        scheduler = Tesseract.createScheduler();
-        
-        const worker = await Tesseract.createWorker('eng+tel', 1, {
-            errorHandler: e => console.error(e)
-        });
-        
-        await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.AUTO, 
-            preserve_interword_spaces: '1'
-        });
+        statusDiv.innerText = "Loading AI Core...";
+        try {
+            // వేగంగా లోడ్ అవ్వడానికి మరియు పాత డేటా మెమరీలోనే దాచుకోవడానికి కాన్ఫిగరేషన్
+            worker = await Tesseract.createWorker('eng+tel', 1, {
+                cacheMethod: 'write'
+            });
+            
+            // హెడ్డింగ్స్ మరియు పూర్తి వాక్యాలను పక్కాగా చదవడం కోసం AUTO లేఅవుట్ మోడ్
+            await worker.setParameters({
+                tessedit_pageseg_mode: Tesseract.PSM.AUTO, 
+                preserve_interword_spaces: '1'
+            });
 
-        scheduler.addWorker(worker);
-        
-        statusDiv.innerText = "App Ready! Point to Book Page...";
-        speakNotification("App is ready. Please point your camera to the book page.");
-        
-        scanTimer = setInterval(autoCaptureAndProcess, 4000);
+            statusDiv.innerText = "App Ready! Place Book Under Camera...";
+            
+            // మీరు అడిగినట్టు వాయిస్ నోటిఫికేషన్ తీసేసి, బీప్ సౌండ్ పెట్టాను
+            playBeepSound();
+            
+            // ప్రతి 3 సెకన్లకు ఒకసారి స్కాన్ రన్ అవుతుంది
+            setInterval(autoCaptureAndProcess, 3000);
+        } catch (e) {
+            statusDiv.innerText = "AI Init Error. Refreshing...";
+            console.error(e);
+        }
     }
 
     async function initCamera() {
         const constraints = {
-            video: { 
-                facingMode: "environment",
-                width: { ideal: 1280 }, 
-                height: { ideal: 720 } 
-            },
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
             audio: false
         };
 
@@ -74,50 +98,50 @@
             video.srcObject = stream;
             await initOCR();
         } catch (err) {
-            console.log("Trying alternative camera constraint...");
             try {
                 const basicStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                 video.srcObject = basicStream;
                 await initOCR();
             } catch (basicErr) {
-                statusDiv.innerText = "Please allow camera access.";
-                speakNotification("Camera error. Please grant permission.");
+                statusDiv.innerText = "Camera Access Denied.";
             }
         }
     }
 
     async function autoCaptureAndProcess() {
-        if (isProcessing || synth.speaking || !scheduler) return;
+        if (isProcessing || synth.speaking || !worker) return;
 
         isProcessing = true;
-        statusDiv.innerText = "Scanning text...";
+        statusDiv.innerText = "Scanning book page...";
 
         const ctxCapture = captureCanvas.getContext('2d');
         captureCanvas.width = video.videoWidth;
         captureCanvas.height = video.videoHeight;
         
-        ctxCapture.filter = 'contrast(1.2) brightness(1.0)';
+        // తెలుగు, ఇంగ్లీష్ అక్షరాల తప్పులు తగ్గించడానికి హై-కాంట్రాస్ట్ ఫిల్టర్స్
+        ctxCapture.filter = 'contrast(1.5) brightness(0.95)';
         ctxCapture.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
 
         try {
-            const result = await scheduler.addJob('recognize', captureCanvas);
+            const { data } = await worker.recognize(captureCanvas);
             
             const ctxOverlay = canvasOverlay.getContext('2d');
             canvasOverlay.width = video.videoWidth;
             canvasOverlay.height = video.videoHeight;
             ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
 
-            if (result && result.data) {
-                let text = result.data.text.trim();
-                let lines = result.data.lines;
+            if (data && data.text) {
+                let text = data.text.trim();
+                let lines = data.lines;
 
-                if (text.length > 2 && text !== lastSpokenText) {
+                if (text.length > 3 && text !== lastSpokenText) {
                     lastSpokenText = text;
-                    statusDiv.innerText = "Reading aloud...";
+                    statusDiv.innerText = "Reading Text...";
 
+                    // పైన ఉండే హెడ్డింగ్స్ మరియు కింద ఉండే లైన్ల చుట్టూ స్పష్టమైన ఎల్లో బాక్స్ హైలైట్ అవుతుంది
                     if (lines && lines.length > 0) {
                         ctxOverlay.strokeStyle = "#f1c40f"; 
-                        ctxOverlay.lineWidth = 6; 
+                        ctxOverlay.lineWidth = 5; 
                         
                         lines.forEach(line => {
                             if(line.text.trim().length > 2) {
@@ -128,8 +152,8 @@
                     }
 
                     readAloud(text);
-                } else if (text.length <= 2) {
-                    statusDiv.innerText = "Point to Book Page...";
+                } else if (text.length <= 3) {
+                    statusDiv.innerText = "Ready for Next Page...";
                 }
             }
         } catch (error) {
@@ -141,27 +165,26 @@
 
     function readAloud(text) {
         synth.cancel();
-        let cleanText = text.replace(/\n/g, " ");
+        
+        // ఇంగ్లీష్ పదాల మధ్య స్పేస్ (Spaces) మిస్ అవ్వకుండా క్లీన్ చేసే సరికొత్త పద్ధతి
+        let cleanText = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+        
+        if (cleanText.length === 0) return;
+
         const utterance = new SpeechSynthesisUtterance(cleanText);
         const hasTelugu = /[\u0C00-\u0C7F]/.test(cleanText);
         
         utterance.lang = hasTelugu ? "te-IN" : "en-US";
-        utterance.rate = hasTelugu ? 0.82 : 0.90; 
+        // పదాలు క్లియర్‌గా వినిపించడానికి స్పీడ్ రేట్ సెట్టింగ్
+        utterance.rate = hasTelugu ? 0.85 : 0.90; 
         
         utterance.onend = function() {
             const ctxOverlay = canvasOverlay.getContext('2d');
             ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
-            statusDiv.innerText = "Point to Book Page...";
+            statusDiv.innerText = "Scan Complete. Ready...";
         };
 
         synth.speak(utterance);
-    }
-
-    function speakNotification(msg) {
-        if (synth.speaking) synth.cancel();
-        const u = new SpeechSynthesisUtterance(msg);
-        u.lang = "en-US"; u.rate = 0.9;
-        synth.speak(u);
     }
 
     window.onload = initCamera;
